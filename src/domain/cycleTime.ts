@@ -14,5 +14,6 @@ export function computeCycleTime(transitions: { to: string; at: string }[]) {
 
   const days = workingDaysBetween(new Date(start.at), new Date(end.at));
 
-  return roundHalfUp(days);
+  const rounded = roundHalfUp(days);
+  return rounded === 0 ? 0.5 : rounded;
 }
