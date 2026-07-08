@@ -9,6 +9,7 @@ export type StoredRetrospective = {
     boardName: string;
     documentUrl: string;
     generatedAt: string;
+    epicSummary?: string;
 };
 
 function bucket() {
@@ -28,7 +29,8 @@ export async function loadRetrospectives(): Promise<StoredRetrospective[]> {
 export async function saveRetrospective(
     epicKey: string,
     boardName: string,
-    documentUrl: string
+    documentUrl: string,
+    epicSummary?: string
 ): Promise<void> {
     const retrospectives = await loadRetrospectives();
 
@@ -39,6 +41,7 @@ export async function saveRetrospective(
         boardName,
         documentUrl,
         generatedAt: new Date().toISOString(),
+        ...(epicSummary !== undefined && { epicSummary }),
     };
 
     if (existingIndex >= 0) {
@@ -59,4 +62,12 @@ export async function getRetrospective(
 ): Promise<StoredRetrospective | null> {
     const retrospectives = await loadRetrospectives();
     return retrospectives.find((r) => r.epicKey === epicKey) ?? null;
+}
+
+export async function getRetrospectivesByProject(
+    projectKey: string
+): Promise<StoredRetrospective[]> {
+    const retrospectives = await loadRetrospectives();
+    const prefix = `${projectKey}-`;
+    return retrospectives.filter((r) => r.epicKey.startsWith(prefix));
 }

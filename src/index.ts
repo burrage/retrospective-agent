@@ -4,7 +4,8 @@ import { loadConfig } from "./config.js";
 import { setupAuth, requireAuth } from "./middleware/auth.js";
 import { buildRetrospective } from "./tools/buildRetrospective.js";
 import { getOngoingEpics, getEpicAndIssues, getAllProjects, getCompletedIssuesWithCycleTime } from "./integrations/jira.js";
-import { getRetrospective, saveRetrospective } from "./storage.js";
+import { getRetrospective, getRetrospectivesByProject, saveRetrospective } from "./storage.js";
+import { groupByQuarter } from "./domain/history.js";
 import { sendSlackNotification } from "./integrations/slack.js";
 import { calculateCycleTimesForIssues, aggregateByWeek, aggregateByBiWeek, aggregateByMonth } from "./domain/analytics.js";
 
@@ -83,10 +84,13 @@ async function main() {
     <body>
         <div class="nav">
             <a href="#" id="backLink">← Back to Retrospectives</a>
-            <button class="theme-toggle" onclick="toggleTheme()">
-                <span id="theme-icon">🌙</span>
-                <span id="theme-text">Dark</span>
-            </button>
+            <div style="display:flex;gap:12px;align-items:center;">
+                <a href="#" id="historyLink" style="color:var(--text-primary);text-decoration:none;font-weight:600;font-size:14px;display:inline-flex;align-items:center;gap:8px;padding:8px 16px;border-radius:8px;background:var(--bg-card);border:1px solid var(--border-color);transition:all 0.2s ease;">📚 History</a>
+                <button class="theme-toggle" onclick="toggleTheme()">
+                    <span id="theme-icon">🌙</span>
+                    <span id="theme-text">Dark</span>
+                </button>
+            </div>
         </div>
         <h1>📊 Cycle Time Analytics</h1>
         <p style="font-size: 14px;">Historical performance metrics for your teams</p>
@@ -131,20 +135,22 @@ async function main() {
                     const urlParams = new URLSearchParams(window.location.search);
                     const projectParam = urlParams.get('project');
                     if (projectParam && projects.some(p => p.key === projectParam)) select.value = projectParam;
-                    updateBackLink();
+                    updateNavLinks();
                     if (projects.length > 0) loadAnalytics();
                 } catch (error) {
                     document.getElementById('charts-container').innerHTML = '<div class="error">Error loading projects</div>';
                 }
             }
-            function updateBackLink() {
-                document.getElementById('backLink').href = \`/?project=\${document.getElementById('projectSelect').value}\`;
+            function updateNavLinks() {
+                const project = document.getElementById('projectSelect').value;
+                document.getElementById('backLink').href = \`/?project=\${project}\`;
+                document.getElementById('historyLink').href = \`/history?project=\${project}\`;
             }
-            document.getElementById('projectSelect').addEventListener('change', updateBackLink);
+            document.getElementById('projectSelect').addEventListener('change', updateNavLinks);
             async function loadAnalytics() {
                 const projectKey = document.getElementById('projectSelect').value;
                 const daysBack = document.getElementById('daysBackSelect').value;
-                updateBackLink();
+                updateNavLinks();
                 document.getElementById('stats-container').innerHTML = '<div class="loading">📈 Loading analytics...</div>';
                 document.getElementById('charts-container').innerHTML = '';
                 try {
@@ -238,8 +244,10 @@ async function main() {
             button:hover { background: var(--accent-hover); transform: translateY(-1px); }
             button:active { transform: translateY(0); }
             button:disabled { background: var(--text-secondary); opacity: 0.5; cursor: not-allowed; transform: none; }
-            #analyticsLink { padding: 10px 20px; background: var(--accent-primary); color: white; text-decoration: none; border-radius: 8px; font-weight: 600; transition: all 0.2s ease; display: inline-flex; align-items: center; gap: 8px; font-size: 14px; }
-            #analyticsLink:hover { background: var(--accent-hover); transform: translateY(-1px); }
+            .header-link { padding: 10px 20px; background: var(--accent-primary); color: white; text-decoration: none; border-radius: 8px; font-weight: 600; transition: all 0.2s ease; display: inline-flex; align-items: center; gap: 8px; font-size: 14px; }
+            .header-link:hover { background: var(--accent-hover); transform: translateY(-1px); }
+            .header-link.secondary { background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); }
+            .header-link.secondary:hover { background: var(--bg-secondary); border-color: var(--accent-primary); }
             #epics-container { animation: fadeIn 0.6s ease-out 0.4s both; }
             .epics-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(450px, 1fr)); gap: 20px; }
             @media (max-width: 768px) { .epics-grid { grid-template-columns: 1fr; } }
@@ -279,7 +287,8 @@ async function main() {
                     <span id="theme-icon">🌙</span>
                     <span id="theme-text">Dark</span>
                 </button>
-                <a href="#" id="analyticsLink"><span>📊</span><span>Analytics</span></a>
+                <a href="#" id="historyLink" class="header-link secondary"><span>📚</span><span>History</span></a>
+                <a href="#" id="analyticsLink" class="header-link"><span>📊</span><span>Analytics</span></a>
             </div>
         </div>
         <div class="board-selector">
@@ -316,15 +325,17 @@ async function main() {
                     const urlParams = new URLSearchParams(window.location.search);
                     const projectParam = urlParams.get('project');
                     if (projectParam && projects.some(p => p.key === projectParam)) select.value = projectParam;
-                    if (projects.length > 0) { updateAnalyticsLink(); loadEpics(); }
+                    if (projects.length > 0) { updateNavLinks(); loadEpics(); }
                 } catch (error) {
                     document.getElementById('boardSelect').innerHTML = '<option value="">Error loading projects</option>';
                 }
             }
-            function updateAnalyticsLink() {
-                document.getElementById('analyticsLink').href = \`/analytics?project=\${document.getElementById('boardSelect').value}\`;
+            function updateNavLinks() {
+                const project = document.getElementById('boardSelect').value;
+                document.getElementById('analyticsLink').href = \`/analytics?project=\${project}\`;
+                document.getElementById('historyLink').href = \`/history?project=\${project}\`;
             }
-            document.getElementById('boardSelect').addEventListener('change', () => { updateAnalyticsLink(); loadEpics(); });
+            document.getElementById('boardSelect').addEventListener('change', () => { updateNavLinks(); loadEpics(); });
             async function loadEpics() {
                 const boardName = document.getElementById('boardSelect').value;
                 const container = document.getElementById('epics-container');
@@ -468,12 +479,184 @@ async function main() {
         }
     });
 
+    app.get("/api/history", async (req, res) => {
+        try {
+            const projectKey = req.query.project as string;
+            if (!projectKey) {
+                res.status(400).json({ error: "Missing project query parameter" });
+                return;
+            }
+            const retrospectives = await getRetrospectivesByProject(projectKey);
+            const grouped = groupByQuarter(retrospectives);
+            res.json(grouped);
+        } catch (err: any) {
+            console.error(err);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.get("/history", (_req, res) => {
+        res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>History - Retrospective Generator</title>
+        <style>
+            @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+            @keyframes slideIn { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
+            @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+            * { box-sizing: border-box; }
+            :root { --bg-primary: #ffffff; --bg-secondary: #f8f9fa; --bg-card: #ffffff; --text-primary: #1a1a1a; --text-secondary: #6c757d; --border-color: #e9ecef; --accent-primary: #0066ff; --accent-hover: #0052cc; --shadow: 0 2px 8px rgba(0,0,0,0.08); --shadow-hover: 0 4px 16px rgba(0,0,0,0.12); }
+            [data-theme="dark"] { --bg-primary: #0d1117; --bg-secondary: #161b22; --bg-card: #1c2128; --text-primary: #e6edf3; --text-secondary: #8b949e; --border-color: #30363d; --accent-primary: #2f81f7; --accent-hover: #539bf5; --shadow: 0 2px 8px rgba(0,0,0,0.3); --shadow-hover: 0 4px 16px rgba(0,0,0,0.4); }
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 1400px; margin: 0 auto; padding: 32px 20px; background: var(--bg-primary); color: var(--text-primary); min-height: 100vh; transition: background-color 0.3s ease, color 0.3s ease; animation: fadeIn 0.6s ease-out; }
+            .nav { margin-bottom: 24px; animation: slideIn 0.6s ease-out; display: flex; justify-content: space-between; align-items: center; }
+            .nav a { color: var(--text-primary); text-decoration: none; font-weight: 600; font-size: 14px; display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 8px; background: var(--bg-card); border: 1px solid var(--border-color); transition: all 0.2s ease; }
+            .nav a:hover { background: var(--bg-secondary); border-color: var(--accent-primary); }
+            .theme-toggle { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 12px; cursor: pointer; transition: all 0.2s ease; display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; color: var(--text-primary); }
+            .theme-toggle:hover { background: var(--bg-secondary); border-color: var(--accent-primary); }
+            h1 { color: var(--text-primary); margin: 0 0 8px 0; font-size: 32px; font-weight: 700; animation: slideIn 0.6s ease-out; }
+            .subtitle { color: var(--text-secondary); margin: 0 0 28px 0; font-size: 15px; animation: slideIn 0.6s ease-out 0.1s both; }
+            .controls { background: var(--bg-card); border: 1px solid var(--border-color); padding: 20px; border-radius: 12px; margin-bottom: 28px; box-shadow: var(--shadow); display: flex; align-items: center; gap: 16px; flex-wrap: wrap; animation: slideIn 0.6s ease-out 0.2s both; }
+            .controls label { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+            select { padding: 10px 16px; font-size: 14px; border-radius: 8px; border: 1px solid var(--border-color); transition: all 0.2s ease; font-family: inherit; background: var(--bg-card); color: var(--text-primary); cursor: pointer; min-width: 220px; }
+            select:hover { border-color: var(--accent-primary); }
+            select:focus { outline: none; border-color: var(--accent-primary); box-shadow: 0 0 0 3px rgba(0,102,255,0.1); }
+            #history-container { animation: fadeIn 0.6s ease-out 0.4s both; }
+            .quarter-section { margin-bottom: 32px; animation: fadeIn 0.5s ease-out backwards; }
+            .quarter-heading { font-size: 18px; font-weight: 700; color: var(--text-primary); margin: 0 0 12px 0; display: flex; align-items: center; gap: 10px; }
+            .quarter-badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 700; background: var(--accent-primary); color: white; letter-spacing: 0.5px; }
+            .retro-table { width: 100%; border-collapse: collapse; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
+            .retro-table thead { background: var(--bg-secondary); }
+            .retro-table th { padding: 12px 20px; text-align: left; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); border-bottom: 1px solid var(--border-color); }
+            .retro-table td { padding: 14px 20px; font-size: 14px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); vertical-align: middle; }
+            .retro-table tr:last-child td { border-bottom: none; }
+            .retro-table tbody tr { transition: background 0.15s ease; }
+            .retro-table tbody tr:hover { background: var(--bg-secondary); }
+            .epic-key-cell { font-weight: 700; color: var(--accent-primary); font-size: 13px; white-space: nowrap; }
+            .epic-key-cell a { color: inherit; text-decoration: none; }
+            .epic-key-cell a:hover { text-decoration: underline; text-underline-offset: 2px; }
+            .doc-link-cell a { color: var(--accent-primary); text-decoration: none; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+            .doc-link-cell a:hover { color: var(--accent-hover); text-decoration: underline; }
+            .date-cell { color: var(--text-secondary); font-size: 13px; white-space: nowrap; }
+            .loading { text-align: center; padding: 60px 20px; color: var(--text-secondary); font-size: 18px; font-weight: 600; animation: pulse 2s infinite; }
+            .empty-state { text-align: center; padding: 60px 20px; background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border-color); color: var(--text-secondary); font-size: 16px; font-weight: 500; }
+            .error { color: #dc3545; padding: 20px; background: var(--bg-card); border-radius: 12px; font-weight: 600; border-left: 4px solid #dc3545; }
+        </style>
+    </head>
+    <body>
+        <div class="nav">
+            <a href="#" id="backLink">← Back to Retrospectives</a>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span id="theme-icon">🌙</span>
+                <span id="theme-text">Dark</span>
+            </button>
+        </div>
+        <h1>📚 Retrospective History</h1>
+        <p class="subtitle">Completed retrospective documents, organised by quarter</p>
+        <div class="controls">
+            <label for="projectSelect">Select Project:</label>
+            <select id="projectSelect"><option value="">Loading projects...</option></select>
+        </div>
+        <div id="history-container"></div>
+        <script>
+            const API_BASE = window.location.origin;
+            function toggleTheme() {
+                const newTheme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+                document.documentElement.setAttribute('data-theme', newTheme);
+                localStorage.setItem('theme', newTheme);
+                updateThemeButton(newTheme);
+            }
+            function updateThemeButton(theme) {
+                document.getElementById('theme-icon').textContent = theme === 'dark' ? '☀️' : '🌙';
+                document.getElementById('theme-text').textContent = theme === 'dark' ? 'Light' : 'Dark';
+            }
+            function initTheme() {
+                const savedTheme = localStorage.getItem('theme') || 'light';
+                document.documentElement.setAttribute('data-theme', savedTheme);
+                updateThemeButton(savedTheme);
+            }
+            async function loadProjects() {
+                try {
+                    const response = await fetch(\`\${API_BASE}/api/projects\`);
+                    const projects = await response.json();
+                    const select = document.getElementById('projectSelect');
+                    select.innerHTML = projects.map(p => \`<option value="\${p.key}">\${p.name} (\${p.key})</option>\`).join('');
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const projectParam = urlParams.get('project');
+                    if (projectParam && projects.some(p => p.key === projectParam)) select.value = projectParam;
+                    updateBackLink();
+                    if (projects.length > 0) loadHistory();
+                } catch (error) {
+                    document.getElementById('history-container').innerHTML = '<div class="error">Error loading projects</div>';
+                }
+            }
+            function updateBackLink() {
+                document.getElementById('backLink').href = \`/?project=\${document.getElementById('projectSelect').value}\`;
+            }
+            document.getElementById('projectSelect').addEventListener('change', () => { updateBackLink(); loadHistory(); });
+            async function loadHistory() {
+                const projectKey = document.getElementById('projectSelect').value;
+                updateBackLink();
+                const container = document.getElementById('history-container');
+                container.innerHTML = '<div class="loading">📚 Loading history...</div>';
+                try {
+                    const response = await fetch(\`\${API_BASE}/api/history?project=\${projectKey}\`);
+                    const quarters = await response.json();
+                    if (!response.ok) throw new Error(quarters.error || 'Failed to load history');
+                    if (quarters.length === 0) {
+                        container.innerHTML = '<div class="empty-state">📋 No completed retrospectives found for this project.<br><br>Retrospectives will appear here once they have been generated and saved.</div>';
+                        return;
+                    }
+                    container.innerHTML = quarters.map((group, index) => \`
+                        <div class="quarter-section" style="animation-delay:\${index * 0.1}s">
+                            <h2 class="quarter-heading">
+                                <span class="quarter-badge">\${group.quarter}</span>
+                                <span style="font-size:14px;font-weight:500;color:var(--text-secondary)">\${group.entries.length} retrospective\${group.entries.length !== 1 ? 's' : ''}</span>
+                            </h2>
+                            <table class="retro-table">
+                                <thead>
+                                    <tr>
+                                        <th>Epic</th>
+                                        <th>Retrospective Name</th>
+                                        <th>Date Generated</th>
+                                        <th>Document</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    \${group.entries.map(entry => \`
+                                        <tr>
+                                            <td class="epic-key-cell"><a href="\${API_BASE.replace(/\\/+$/, '')}" target="_blank">\${entry.epicKey}</a></td>
+                                            <td>\${escapeHtml(entry.epicSummary)}</td>
+                                            <td class="date-cell">\${formatDate(entry.generatedAt)}</td>
+                                            <td class="doc-link-cell"><a href="\${entry.documentUrl}" target="_blank" rel="noopener noreferrer">Open Doc →</a></td>
+                                        </tr>\`).join('')}
+                                </tbody>
+                            </table>
+                        </div>\`).join('');
+                } catch (error) {
+                    container.innerHTML = \`<div class="error">Error: \${error.message}</div>\`;
+                }
+            }
+            function formatDate(iso) {
+                return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+            }
+            function escapeHtml(str) {
+                return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+            }
+            window.addEventListener('DOMContentLoaded', () => { initTheme(); loadProjects(); });
+        </script>
+    </body>
+    </html>
+    `);
+    });
+
     app.post("/run", async (req, res) => {
         try {
             const { board_name, epic_key } = req.body;
             const result = await buildRetrospective({ board_name, epic_key, config });
-            await saveRetrospective(epic_key, board_name, result.document);
             const { epic } = await getEpicAndIssues(epic_key);
+            const epicSummary: string = epic.fields.summary;
+            await saveRetrospective(epic_key, board_name, result.document, epicSummary);
             await sendSlackNotification({
                 epicKey: epic_key,
                 epicSummary: epic.fields.summary,
