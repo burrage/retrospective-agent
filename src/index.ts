@@ -4,7 +4,7 @@ import { loadConfig } from "./config.js";
 import { setupAuth, requireAuth } from "./middleware/auth.js";
 import { buildRetrospective } from "./tools/buildRetrospective.js";
 import { getOngoingEpics, getEpicAndIssues, getAllProjects, getCompletedIssuesWithCycleTime } from "./integrations/jira.js";
-import { getRetrospective, getRetrospectivesByProject, saveRetrospective } from "./storage.js";
+import { getRetrospective, getRetrospectivesByProject, loadRetrospectives, saveRetrospective } from "./storage.js";
 import { groupByQuarter } from "./domain/history.js";
 import { sendSlackNotification } from "./integrations/slack.js";
 import { calculateCycleTimesForIssues, aggregateByWeek, aggregateByBiWeek, aggregateByMonth } from "./domain/analytics.js";
@@ -482,12 +482,23 @@ async function main() {
     app.get("/api/history", async (req, res) => {
         try {
             const projectKey = req.query.project as string;
-            if (!projectKey) {
-                res.status(400).json({ error: "Missing project query parameter" });
-                return;
-            }
-            const retrospectives = await getRetrospectivesByProject(projectKey);
-            const grouped = groupByQuarter(retrospectives);
+            const retrospectives =
+                !projectKey || projectKey === "all"
+                    ? await loadRetrospectives()
+                    : await getRetrospectivesByProject(projectKey);
+
+            const grouped = groupByQuarter(retrospectives).map((group) => ({
+                ...group,
+                entries: group.entries.map((e) => ({
+                    ...e,
+                    jiraUrl: `${config.JIRA_BASE_URL}/browse/${e.epicKey}`,
+                    projectName: e.boardName
+                        .split(" ")
+                        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+                        .join(" "),
+                })),
+            }));
+
             res.json(grouped);
         } catch (err: any) {
             console.error(err);
@@ -532,14 +543,16 @@ async function main() {
             .retro-table tr:last-child td { border-bottom: none; }
             .retro-table tbody tr { transition: background 0.15s ease; }
             .retro-table tbody tr:hover { background: var(--bg-secondary); }
-            .epic-key-cell { font-weight: 700; color: var(--accent-primary); font-size: 13px; white-space: nowrap; }
-            .epic-key-cell a { color: inherit; text-decoration: none; }
-            .epic-key-cell a:hover { text-decoration: underline; text-underline-offset: 2px; }
+            .epic-title-cell a { color: var(--accent-primary); text-decoration: none; font-weight: 600; }
+            .epic-title-cell a:hover { text-decoration: underline; text-underline-offset: 2px; }
+            .project-cell { color: var(--text-secondary); font-size: 13px; }
             .doc-link-cell a { color: var(--accent-primary); text-decoration: none; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
             .doc-link-cell a:hover { color: var(--accent-hover); text-decoration: underline; }
             .date-cell { color: var(--text-secondary); font-size: 13px; white-space: nowrap; }
             .loading { text-align: center; padding: 60px 20px; color: var(--text-secondary); font-size: 18px; font-weight: 600; animation: pulse 2s infinite; }
-            .empty-state { text-align: center; padding: 60px 20px; background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border-color); color: var(--text-secondary); font-size: 16px; font-weight: 500; }
+            .empty-state { text-align: center; padding: 60px 20px; background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border-color); color: var(--text-secondary); font-size: 16px; font-weight: 500; line-height: 1.8; }
+            .empty-state a { color: var(--accent-primary); font-weight: 600; text-decoration: none; }
+            .empty-state a:hover { text-decoration: underline; }
             .error { color: #dc3545; padding: 20px; background: var(--bg-card); border-radius: 12px; font-weight: 600; border-left: 4px solid #dc3545; }
         </style>
     </head>
@@ -554,8 +567,8 @@ async function main() {
         <h1>📚 Retrospective History</h1>
         <p class="subtitle">Completed retrospective documents, organised by quarter</p>
         <div class="controls">
-            <label for="projectSelect">Select Project:</label>
-            <select id="projectSelect"><option value="">Loading projects...</option></select>
+            <label for="projectSelect">View:</label>
+            <select id="projectSelect"><option value="all">All Projects</option></select>
         </div>
         <div id="history-container"></div>
         <script>
@@ -580,31 +593,41 @@ async function main() {
                     const response = await fetch(\`\${API_BASE}/api/projects\`);
                     const projects = await response.json();
                     const select = document.getElementById('projectSelect');
-                    select.innerHTML = projects.map(p => \`<option value="\${p.key}">\${p.name} (\${p.key})</option>\`).join('');
+                    // "All Projects" stays as first option; append individual projects below it
+                    select.innerHTML = '<option value="all">All Projects</option>' +
+                        projects.map(p => \`<option value="\${p.key}">\${p.name} (\${p.key})</option>\`).join('');
                     const urlParams = new URLSearchParams(window.location.search);
                     const projectParam = urlParams.get('project');
-                    if (projectParam && projects.some(p => p.key === projectParam)) select.value = projectParam;
+                    if (projectParam && (projectParam === 'all' || projects.some(p => p.key === projectParam))) {
+                        select.value = projectParam;
+                    }
                     updateBackLink();
-                    if (projects.length > 0) loadHistory();
+                    loadHistory();
                 } catch (error) {
                     document.getElementById('history-container').innerHTML = '<div class="error">Error loading projects</div>';
                 }
             }
             function updateBackLink() {
-                document.getElementById('backLink').href = \`/?project=\${document.getElementById('projectSelect').value}\`;
+                const project = document.getElementById('projectSelect').value;
+                document.getElementById('backLink').href = project === 'all' ? '/' : \`/?project=\${project}\`;
             }
             document.getElementById('projectSelect').addEventListener('change', () => { updateBackLink(); loadHistory(); });
             async function loadHistory() {
                 const projectKey = document.getElementById('projectSelect').value;
+                const isAllProjects = projectKey === 'all';
                 updateBackLink();
                 const container = document.getElementById('history-container');
                 container.innerHTML = '<div class="loading">📚 Loading history...</div>';
                 try {
-                    const response = await fetch(\`\${API_BASE}/api/history?project=\${projectKey}\`);
+                    const url = isAllProjects
+                        ? \`\${API_BASE}/api/history\`
+                        : \`\${API_BASE}/api/history?project=\${projectKey}\`;
+                    const response = await fetch(url);
                     const quarters = await response.json();
                     if (!response.ok) throw new Error(quarters.error || 'Failed to load history');
                     if (quarters.length === 0) {
-                        container.innerHTML = '<div class="empty-state">📋 No completed retrospectives found for this project.<br><br>Retrospectives will appear here once they have been generated and saved.</div>';
+                        const backHref = isAllProjects ? '/' : \`/?project=\${projectKey}\`;
+                        container.innerHTML = \`<div class="empty-state">📋 No retrospectives have been generated yet.<br>Retrospectives appear here after they are generated on the home page.<br><a href="\${backHref}">Go generate one →</a></div>\`;
                         return;
                     }
                     container.innerHTML = quarters.map((group, index) => \`
@@ -617,7 +640,7 @@ async function main() {
                                 <thead>
                                     <tr>
                                         <th>Epic</th>
-                                        <th>Retrospective Name</th>
+                                        \${isAllProjects ? '<th>Project</th>' : ''}
                                         <th>Date Generated</th>
                                         <th>Document</th>
                                     </tr>
@@ -625,8 +648,8 @@ async function main() {
                                 <tbody>
                                     \${group.entries.map(entry => \`
                                         <tr>
-                                            <td class="epic-key-cell"><a href="\${API_BASE.replace(/\\/+$/, '')}" target="_blank">\${entry.epicKey}</a></td>
-                                            <td>\${escapeHtml(entry.epicSummary)}</td>
+                                            <td class="epic-title-cell"><a href="\${entry.jiraUrl}" target="_blank" rel="noopener noreferrer">\${escapeHtml(entry.epicSummary)}</a></td>
+                                            \${isAllProjects ? \`<td class="project-cell">\${escapeHtml(entry.projectName)}</td>\` : ''}
                                             <td class="date-cell">\${formatDate(entry.generatedAt)}</td>
                                             <td class="doc-link-cell"><a href="\${entry.documentUrl}" target="_blank" rel="noopener noreferrer">Open Doc →</a></td>
                                         </tr>\`).join('')}
