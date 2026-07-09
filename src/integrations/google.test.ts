@@ -56,6 +56,7 @@ describe("shareDocWithGroup", () => {
         expect(mockPermissionsCreate).toHaveBeenCalledOnce();
         expect(mockPermissionsCreate).toHaveBeenCalledWith({
             fileId: "doc-123",
+            sendNotificationEmail: false,
             requestBody: {
                 type: "group",
                 role: "writer",

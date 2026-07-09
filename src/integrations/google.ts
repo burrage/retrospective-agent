@@ -380,6 +380,7 @@ export async function shareDocWithGroup(
     const drive = google.drive({ version: "v3", auth: config.googleAuth });
     await drive.permissions.create({
         fileId,
+        sendNotificationEmail: false,
         requestBody: {
             type: "group",
             role: "writer",
