@@ -546,6 +546,7 @@ async function main() {
             .retro-table tbody tr:hover { background: var(--bg-secondary); }
             .epic-title-cell a { color: var(--accent-primary); text-decoration: none; font-weight: 600; }
             .epic-title-cell a:hover { text-decoration: underline; text-underline-offset: 2px; }
+            .epic-summary-cell { color: var(--text-primary); font-size: 14px; }
             .project-cell { color: var(--text-secondary); font-size: 13px; }
             .doc-link-cell a { color: var(--accent-primary); text-decoration: none; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
             .doc-link-cell a:hover { color: var(--accent-hover); text-decoration: underline; }
@@ -641,6 +642,7 @@ async function main() {
                                 <thead>
                                     <tr>
                                         <th>Epic</th>
+                                        <th>Summary</th>
                                         \${isAllProjects ? '<th>Project</th>' : ''}
                                         <th>Date Generated</th>
                                         <th>Document</th>
@@ -649,7 +651,8 @@ async function main() {
                                 <tbody>
                                     \${group.entries.map(entry => \`
                                         <tr>
-                                            <td class="epic-title-cell"><a href="\${entry.jiraUrl}" target="_blank" rel="noopener noreferrer">\${escapeHtml(entry.epicSummary)}</a></td>
+                                            <td class="epic-title-cell"><a href="\${entry.jiraUrl}" target="_blank" rel="noopener noreferrer">\${escapeHtml(entry.epicKey)}</a></td>
+                                            <td class="epic-summary-cell">\${escapeHtml(entry.epicSummary)}</td>
                                             \${isAllProjects ? \`<td class="project-cell">\${escapeHtml(entry.projectName)}</td>\` : ''}
                                             <td class="date-cell">\${formatDate(entry.generatedAt)}</td>
                                             <td class="doc-link-cell"><a href="\${entry.documentUrl}" target="_blank" rel="noopener noreferrer">Open Doc →</a></td>
