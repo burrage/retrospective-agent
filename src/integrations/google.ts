@@ -360,5 +360,30 @@ export async function createDoc(
         }
     }
 
+    // Pass 6: share the doc with the product-development group as editor
+    await shareDocWithGroup(id, PRODUCT_DEVELOPMENT_GROUP, config);
+
     return `https://docs.google.com/document/d/${id}`;
+}
+
+const PRODUCT_DEVELOPMENT_GROUP = "productdevelopment@curiouslearning.org";
+
+/**
+ * Grants editor ("writer") access to a Google Drive file for the given group
+ * email address. Exported for unit testing.
+ */
+export async function shareDocWithGroup(
+    fileId: string,
+    groupEmail: string,
+    config: AppConfig
+): Promise<void> {
+    const drive = google.drive({ version: "v3", auth: config.googleAuth });
+    await drive.permissions.create({
+        fileId,
+        requestBody: {
+            type: "group",
+            role: "writer",
+            emailAddress: groupEmail,
+        },
+    });
 }
