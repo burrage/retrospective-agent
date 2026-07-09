@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ---------------------------------------------------------------------------
-// Mock googleapis before importing the module under test so that the mock is
-// in place when the module initialises.
+// vi.hoisted runs before the vi.mock factory, so mockPermissionsCreate is
+// defined by the time the googleapis mock is constructed.
 // ---------------------------------------------------------------------------
-const mockPermissionsCreate = vi.fn().mockResolvedValue({});
+const { mockPermissionsCreate } = vi.hoisted(() => ({
+    mockPermissionsCreate: vi.fn().mockResolvedValue({}),
+}));
 
 vi.mock("googleapis", () => {
     return {
