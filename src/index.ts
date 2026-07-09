@@ -325,7 +325,8 @@ async function main() {
                     const urlParams = new URLSearchParams(window.location.search);
                     const projectParam = urlParams.get('project');
                     if (projectParam && projects.some(p => p.key === projectParam)) select.value = projectParam;
-                    if (projects.length > 0) { updateNavLinks(); loadEpics(); }
+                    updateNavLinks();
+                    if (projects.length > 0) { loadEpics(); }
                 } catch (error) {
                     document.getElementById('boardSelect').innerHTML = '<option value="">Error loading projects</option>';
                 }
