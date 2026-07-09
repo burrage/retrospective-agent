@@ -16,8 +16,8 @@ export type QuarterGroup = {
 };
 
 function getQuarterLabel(date: Date): { label: string; sortKey: number } {
-    const year = date.getFullYear();
-    const quarter = Math.ceil((date.getMonth() + 1) / 3);
+    const year = date.getUTCFullYear();
+    const quarter = Math.ceil((date.getUTCMonth() + 1) / 3);
     return {
         label: `Q${quarter} ${year}`,
         sortKey: year * 4 + quarter,
@@ -30,8 +30,8 @@ export function groupByQuarter(retrospectives: StoredRetrospective[]): QuarterGr
     for (const r of retrospectives) {
         const date = new Date(r.generatedAt);
         const { label, sortKey } = getQuarterLabel(date);
-        const year = date.getFullYear();
-        const quarterNumber = Math.ceil((date.getMonth() + 1) / 3);
+        const year = date.getUTCFullYear();
+        const quarterNumber = Math.ceil((date.getUTCMonth() + 1) / 3);
 
         if (!groups.has(label)) {
             groups.set(label, { sortKey, year, quarterNumber, entries: [] });
