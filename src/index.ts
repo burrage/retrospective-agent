@@ -651,7 +651,7 @@ async function main() {
                                 <tbody>
                                     \${group.entries.map(entry => \`
                                         <tr>
-                                            <td class="epic-title-cell"><a href="\${entry.jiraUrl}" target="_blank" rel="noopener noreferrer">\${escapeHtml(entry.epicKey)}</a></td>
+                                            <td class="epic-title-cell"><a href="\${escapeHtml(entry.jiraUrl)}" target="_blank" rel="noopener noreferrer">\${escapeHtml(entry.epicKey)}</a></td>
                                             <td class="epic-summary-cell">\${escapeHtml(entry.epicSummary)}</td>
                                             \${isAllProjects ? \`<td class="project-cell">\${escapeHtml(entry.projectName)}</td>\` : ''}
                                             <td class="date-cell">\${formatDate(entry.generatedAt)}</td>
