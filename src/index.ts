@@ -350,7 +350,9 @@ async function main() {
                     }
                     const epicsHTML = epics.map((epic, index) => {
                         const hasDoc = epic.documentUrl;
-                        const buttonHtml = hasDoc ? '' : \`
+                        const buttonHtml = hasDoc ? \`
+                            <button class="generate-btn" onclick="regenerateDoc('\${epic.key}', '\${boardName}', '\${epic.documentUrl}')">Regenerate Retrospective</button>
+                            <span class="loading" id="loading-\${epic.key}" style="display:none;">✨ Regenerating...</span>\` : \`
                             <button class="generate-btn" onclick="generateDoc('\${epic.key}', '\${boardName}')">Generate Retrospective</button>
                             <span class="loading" id="loading-\${epic.key}" style="display:none;">✨ Generating...</span>\`;
                         const existingDoc = hasDoc ? \`
@@ -402,6 +404,35 @@ async function main() {
                         button.remove();
                         loadingEl.remove();
                         resultEl.innerHTML = \`<div class="doc-link"><strong>Retrospective Generated:</strong> Just now<br><a href="\${result.document}" target="_blank">Open Retrospective Doc</a></div>\`;
+                    } else {
+                        resultEl.innerHTML = \`<div class="error">Error: \${result.error}</div>\`;
+                        loadingEl.style.display = 'none';
+                        button.disabled = false;
+                    }
+                } catch (error) {
+                    resultEl.innerHTML = \`<div class="error">Error: \${error.message}</div>\`;
+                    loadingEl.style.display = 'none';
+                    button.disabled = false;
+                }
+            }
+            async function regenerateDoc(epicKey, boardName, documentUrl) {
+                const loadingEl = document.getElementById(\`loading-\${epicKey}\`);
+                const resultEl = document.getElementById(\`result-\${epicKey}\`);
+                const button = event.target;
+                button.disabled = true;
+                loadingEl.style.display = 'inline';
+                resultEl.innerHTML = '';
+                try {
+                    const response = await fetch(\`\${API_BASE}/run\`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ board_name: getBoardName(boardName), epic_key: epicKey, existing_document_url: documentUrl })
+                    });
+                    const result = await response.json();
+                    if (response.ok) {
+                        loadingEl.style.display = 'none';
+                        button.disabled = false;
+                        resultEl.innerHTML = \`<div class="doc-link"><strong>Retrospective Regenerated:</strong> Just now<br><a href="\${result.document}" target="_blank">Open Retrospective Doc</a></div>\`;
                     } else {
                         resultEl.innerHTML = \`<div class="error">Error: \${result.error}</div>\`;
                         loadingEl.style.display = 'none';
@@ -679,8 +710,22 @@ async function main() {
 
     app.post("/run", async (req, res) => {
         try {
-            const { board_name, epic_key } = req.body;
-            const result = await buildRetrospective({ board_name, epic_key, config });
+            const { board_name, epic_key, existing_document_url } = req.body;
+
+            if (existing_document_url !== undefined) {
+                const stored = await getRetrospective(epic_key);
+                if (!stored || stored.documentUrl !== existing_document_url) {
+                    res.status(400).json({ error: "existing_document_url does not match the stored retrospective for this epic" });
+                    return;
+                }
+            }
+
+            const result = await buildRetrospective({
+                board_name,
+                epic_key,
+                config,
+                existingDocumentUrl: existing_document_url,
+            });
             const { epic } = await getEpicAndIssues(epic_key);
             const epicSummary: string = epic.fields.summary;
             await saveRetrospective(epic_key, board_name, result.document, epicSummary);
