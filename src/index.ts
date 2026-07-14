@@ -711,6 +711,15 @@ async function main() {
     app.post("/run", async (req, res) => {
         try {
             const { board_name, epic_key, existing_document_url } = req.body;
+
+            if (existing_document_url !== undefined) {
+                const stored = await getRetrospective(epic_key);
+                if (!stored || stored.documentUrl !== existing_document_url) {
+                    res.status(400).json({ error: "existing_document_url does not match the stored retrospective for this epic" });
+                    return;
+                }
+            }
+
             const result = await buildRetrospective({
                 board_name,
                 epic_key,
