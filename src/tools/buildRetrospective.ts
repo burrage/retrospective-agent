@@ -1,6 +1,6 @@
 import { getEpicAndIssues, getTransitions } from "../integrations/jira.js";
 import { computeCycleTime } from "../domain/cycleTime.js";
-import { createDoc } from "../integrations/google.js";
+import { createDoc, overwriteDoc } from "../integrations/google.js";
 import { roundHalfUp } from "../domain/workingDays.js";
 import type { AppConfig } from "../config.js";
 
@@ -125,14 +125,21 @@ function extractSectionToEnd(text: string, startHeaders: string[]): string | nul
     return cleaned.length > 0 ? cleaned : null;
 }
 
+function extractDocIdFromUrl(url: string): string | null {
+    const match = url.match(/\/document\/d\/([a-zA-Z0-9_-]+)/);
+    return match ? match[1] : null;
+}
+
 export async function buildRetrospective({
     board_name,
     epic_key,
     config,
+    existingDocumentUrl,
 }: {
     board_name: string;
     epic_key: string;
     config: AppConfig;
+    existingDocumentUrl?: string;
 }) {
     const { epic, issues } = await getEpicAndIssues(epic_key);
 
@@ -261,8 +268,15 @@ What Should We Do Differently Next Time:
 - 
 `;
 
-    // Pass config through so createDoc can use the service-account auth client
-    const doc = await createDoc(epic.fields.summary, content, config);
+    let documentUrl: string;
+    if (existingDocumentUrl) {
+        const docId = extractDocIdFromUrl(existingDocumentUrl);
+        if (!docId) throw new Error(`Invalid document URL: ${existingDocumentUrl}`);
+        await overwriteDoc(docId, epic.fields.summary, content, config);
+        documentUrl = existingDocumentUrl;
+    } else {
+        documentUrl = await createDoc(epic.fields.summary, content, config);
+    }
 
-    return { document: doc };
+    return { document: documentUrl };
 }

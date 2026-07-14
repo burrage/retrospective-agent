@@ -59,36 +59,16 @@ function makeBoldRange(startIndex: number, endIndex: number) {
     };
 }
 
-export async function createDoc(
+/**
+ * Applies paragraph styling, bold labels, bullet points, and Jira key
+ * hyperlinks to an existing Google Doc. Used by both createDoc and overwriteDoc.
+ */
+async function applyDocFormatting(
+    docs: ReturnType<typeof google.docs>,
+    id: string,
     title: string,
-    content: string,
     config: AppConfig
-) {
-    const auth = config.googleAuth;
-    const docs = google.docs({ version: "v1", auth });
-
-    const doc = await docs.documents.create({
-        requestBody: { title },
-    });
-
-    const id = doc.data.documentId;
-    if (!id) throw new Error("No Google Doc ID returned");
-
-    // Insert all text
-    await docs.documents.batchUpdate({
-        documentId: id,
-        requestBody: {
-            requests: [
-                {
-                    insertText: {
-                        location: { index: 1 },
-                        text: content,
-                    },
-                },
-            ],
-        },
-    });
-
+): Promise<void> {
     // Pass 1: paragraph styles
     {
         const fullDoc = await docs.documents.get({ documentId: id });
@@ -336,6 +316,39 @@ export async function createDoc(
             });
         }
     }
+}
+
+export async function createDoc(
+    title: string,
+    content: string,
+    config: AppConfig
+) {
+    const auth = config.googleAuth;
+    const docs = google.docs({ version: "v1", auth });
+
+    const doc = await docs.documents.create({
+        requestBody: { title },
+    });
+
+    const id = doc.data.documentId;
+    if (!id) throw new Error("No Google Doc ID returned");
+
+    // Insert all text
+    await docs.documents.batchUpdate({
+        documentId: id,
+        requestBody: {
+            requests: [
+                {
+                    insertText: {
+                        location: { index: 1 },
+                        text: content,
+                    },
+                },
+            ],
+        },
+    });
+
+    await applyDocFormatting(docs, id, title, config);
 
     // Pass 5: move the doc into the target Drive folder
     {
@@ -364,6 +377,61 @@ export async function createDoc(
     await shareDocWithGroup(id, PRODUCT_DEVELOPMENT_GROUP, config);
 
     return `https://docs.google.com/document/d/${id}`;
+}
+
+/**
+ * Overwrites the content of an existing Google Doc identified by `documentId`.
+ * The document URL (and therefore the entry in the History table) remains unchanged.
+ * The doc is not moved or re-shared because it already lives in the correct
+ * folder and has the correct permissions.
+ */
+export async function overwriteDoc(
+    documentId: string,
+    title: string,
+    content: string,
+    config: AppConfig
+): Promise<void> {
+    const auth = config.googleAuth;
+    const docs = google.docs({ version: "v1", auth });
+
+    // Determine the current end index so we can delete all existing content
+    const existingDoc = await docs.documents.get({ documentId });
+    const bodyContent = existingDoc.data.body?.content ?? [];
+    const lastElement = bodyContent[bodyContent.length - 1];
+    const endIndex = lastElement?.endIndex ?? 2;
+
+    // Delete everything except the mandatory trailing newline (index 0 is reserved)
+    if (endIndex > 2) {
+        await docs.documents.batchUpdate({
+            documentId,
+            requestBody: {
+                requests: [
+                    {
+                        deleteContentRange: {
+                            range: { startIndex: 1, endIndex: endIndex - 1 },
+                        },
+                    },
+                ],
+            },
+        });
+    }
+
+    // Insert the new content
+    await docs.documents.batchUpdate({
+        documentId,
+        requestBody: {
+            requests: [
+                {
+                    insertText: {
+                        location: { index: 1 },
+                        text: content,
+                    },
+                },
+            ],
+        },
+    });
+
+    await applyDocFormatting(docs, documentId, title, config);
 }
 
 const PRODUCT_DEVELOPMENT_GROUP = "productdevelopment@curiouslearning.org";
