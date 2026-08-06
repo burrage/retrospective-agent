@@ -3,11 +3,12 @@ import type { Request, Response } from "express";
 import { loadConfig } from "./config.js";
 import { setupAuth, requireAuth } from "./middleware/auth.js";
 import { buildRetrospective } from "./tools/buildRetrospective.js";
-import { getOngoingEpics, getEpicAndIssues, getAllProjects, getCompletedIssuesWithCycleTime } from "./integrations/jira.js";
+import { getOngoingEpics, getEpicAndIssues, getAllProjects, getCompletedIssuesWithCycleTime, getOpenTicketCount } from "./integrations/jira.js";
 import { getRetrospective, getRetrospectivesByProject, loadRetrospectives, saveRetrospective } from "./storage.js";
 import { groupByQuarter } from "./domain/history.js";
 import { sendSlackNotification } from "./integrations/slack.js";
-import { calculateCycleTimesForIssues, aggregateByWeek, aggregateByBiWeek, aggregateByMonth } from "./domain/analytics.js";
+import { calculateCycleTimesForIssues, aggregateByWeek, aggregateByBiWeek, aggregateByMonth, computeProjectAverageCycleTime } from "./domain/analytics.js";
+import { computeAnticipatedCompletionDate, formatDateMMDDYYYY } from "./domain/anticipatedCompletion.js";
 
 async function main() {
     const config = await loadConfig();
@@ -362,11 +363,15 @@ async function main() {
                             </div>\` : '';
                         const progress = epic.progress || { total: 0, completed: 0, percentage: 0 };
                         const progressBarClass = progress.percentage === 100 ? 'completed' : '';
+                        const anticipatedDateHtml = epic.anticipatedCompletionDate
+                            ? \`<div class="progress-text">Anticipated completion date: \${epic.anticipatedCompletionDate}</div>\`
+                            : '';
                         const progressHtml = progress.total > 0 ? \`
                             <div class="progress-container">
                                 <div class="progress-bar-bg"><div class="progress-bar-fill \${progressBarClass}" style="width:\${progress.percentage}%"></div></div>
                                 <div class="progress-text">\${progress.completed} of \${progress.total} tasks completed (\${progress.percentage}%)</div>
-                            </div>\` : '<div class="progress-text">No tasks in this epic yet</div>';
+                                \${anticipatedDateHtml}
+                            </div>\` : \`<div class="progress-text">No tasks in this epic yet</div>\${anticipatedDateHtml}\`;
                         return \`
                             <div class="epic-card" id="epic-\${epic.key}" style="animation-delay:\${index * 0.1}s">
                                 <div class="epic-header">
@@ -469,15 +474,27 @@ async function main() {
                 res.status(400).json({ error: "Missing board query parameter" });
                 return;
             }
-            const epics = await getOngoingEpics(board);
+            const [epics, avgCycleTime] = await Promise.all([
+                getOngoingEpics(board),
+                computeProjectAverageCycleTime(board, 90),
+            ]);
             const epicsWithDocs = await Promise.all(
                 epics.map(async (epic) => {
-                    const existing = await getRetrospective(epic.key);
+                    const [existing, openTicketCount] = await Promise.all([
+                        getRetrospective(epic.key),
+                        getOpenTicketCount(epic.key),
+                    ]);
+                    const completionDate = computeAnticipatedCompletionDate(
+                        new Date(),
+                        openTicketCount,
+                        avgCycleTime
+                    );
                     return {
                         ...epic,
                         jiraUrl: `${config.JIRA_BASE_URL}/browse/${epic.key}`,
                         documentUrl: existing?.documentUrl || null,
                         generatedAt: existing?.generatedAt || null,
+                        anticipatedCompletionDate: completionDate ? formatDateMMDDYYYY(completionDate) : null,
                     };
                 })
             );
