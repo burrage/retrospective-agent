@@ -476,7 +476,10 @@ async function main() {
             }
             const [epics, avgCycleTime] = await Promise.all([
                 getOngoingEpics(board),
-                computeProjectAverageCycleTime(board, 90),
+                computeProjectAverageCycleTime(board, 90).catch((err) => {
+                    console.warn(`Could not compute avg cycle time for ${board}:`, err.message);
+                    return 0;
+                }),
             ]);
             const epicsWithDocs = await Promise.all(
                 epics.map(async (epic) => {
