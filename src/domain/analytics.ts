@@ -16,27 +16,34 @@ type CycleTimeData = {
     completedDate: Date;
 };
 
+const CHANGELOG_CONCURRENCY = 5;
+
 export async function calculateCycleTimesForIssues(issues: CompletedIssue[]): Promise<CycleTimeData[]> {
-    const cycleTimeData: CycleTimeData[] = [];
+    const results: (CycleTimeData | null)[] = new Array(issues.length).fill(null);
+    let index = 0;
 
-    for (const issue of issues) {
-        try {
-            const transitions = await getTransitions(issue.key);
-            const cycleTime = computeCycleTime(transitions);
-
-            if (cycleTime !== null) {
-                cycleTimeData.push({
-                    key: issue.key,
-                    cycleTime,
-                    completedDate: new Date(issue.completed)
-                });
+    async function worker() {
+        while (true) {
+            const i = index++;
+            if (i >= issues.length) break;
+            const issue = issues[i];
+            try {
+                const transitions = await getTransitions(issue.key);
+                const cycleTime = computeCycleTime(transitions);
+                if (cycleTime !== null) {
+                    results[i] = { key: issue.key, cycleTime, completedDate: new Date(issue.completed) };
+                }
+            } catch (error) {
+                console.warn(`Failed to get cycle time for ${issue.key}:`, error);
             }
-        } catch (error) {
-            console.warn(`Failed to get cycle time for ${issue.key}:`, error);
         }
     }
 
-    return cycleTimeData;
+    await Promise.all(
+        Array.from({ length: Math.min(CHANGELOG_CONCURRENCY, issues.length) }, () => worker())
+    );
+
+    return results.filter((r): r is CycleTimeData => r !== null);
 }
 
 export function aggregateByWeek(data: CycleTimeData[]): { week: string; average: number; count: number }[] {
@@ -142,15 +149,27 @@ function getWeekNumber(date: Date): number {
     return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
 }
 
+type CacheEntry = { value: number; expiresAt: number };
+const avgCycleTimeCache = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 export async function computeProjectAverageCycleTime(
     projectKey: string,
     daysBack: number = 90
 ): Promise<number> {
+    const cacheKey = `${projectKey}:${daysBack}`;
+    const cached = avgCycleTimeCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt) {
+        return cached.value;
+    }
+
     const completedIssues = await getCompletedIssuesWithCycleTime(projectKey, daysBack);
     const cycleTimeData = await calculateCycleTimesForIssues(completedIssues);
 
-    if (cycleTimeData.length === 0) return 0;
+    const value = cycleTimeData.length === 0
+        ? 0
+        : roundHalfUp(cycleTimeData.reduce((acc, item) => acc + item.cycleTime, 0) / cycleTimeData.length);
 
-    const sum = cycleTimeData.reduce((acc, item) => acc + item.cycleTime, 0);
-    return roundHalfUp(sum / cycleTimeData.length);
+    avgCycleTimeCache.set(cacheKey, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+    return value;
 }

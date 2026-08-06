@@ -371,7 +371,7 @@ async function main() {
                                 <div class="progress-bar-bg"><div class="progress-bar-fill \${progressBarClass}" style="width:\${progress.percentage}%"></div></div>
                                 <div class="progress-text">\${progress.completed} of \${progress.total} tasks completed (\${progress.percentage}%)</div>
                                 \${anticipatedDateHtml}
-                            </div>\` : '<div class="progress-text">No tasks in this epic yet</div>';
+                            </div>\` : \`<div class="progress-text">No tasks in this epic yet</div>\${anticipatedDateHtml}\`;
                         return \`
                             <div class="epic-card" id="epic-\${epic.key}" style="animation-delay:\${index * 0.1}s">
                                 <div class="epic-header">
