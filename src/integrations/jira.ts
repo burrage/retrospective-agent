@@ -122,11 +122,11 @@ export async function getOngoingEpics(projectKey: string) {
 export async function getOpenTicketCount(epicKey: string): Promise<number> {
     const result = await jira(`/rest/api/3/search/jql`, "POST", {
         jql: `parent = "${epicKey}" AND status in ("To Do", "In Progress", "Review/QA")`,
-        maxResults: 0,
-        fields: []
+        maxResults: 1000,
+        fields: ["status"]
     });
 
-    return result.total as number;
+    return result.issues.length as number;
 }
 
 export async function getCompletedIssuesWithCycleTime(projectKey: string, daysBack: number = 30) {
