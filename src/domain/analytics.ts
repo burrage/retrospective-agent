@@ -1,5 +1,6 @@
 import { computeCycleTime } from "./cycleTime.js";
-import { getTransitions } from "../integrations/jira.js";
+import { getTransitions, getCompletedIssuesWithCycleTime } from "../integrations/jira.js";
+import { roundHalfUp } from "./workingDays.js";
 
 type CompletedIssue = {
     key: string;
@@ -139,4 +140,17 @@ function getWeekNumber(date: Date): number {
     d.setUTCDate(d.getUTCDate() + 4 - dayNum);
     const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
     return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+}
+
+export async function computeProjectAverageCycleTime(
+    projectKey: string,
+    daysBack: number = 90
+): Promise<number> {
+    const completedIssues = await getCompletedIssuesWithCycleTime(projectKey, daysBack);
+    const cycleTimeData = await calculateCycleTimesForIssues(completedIssues);
+
+    if (cycleTimeData.length === 0) return 0;
+
+    const sum = cycleTimeData.reduce((acc, item) => acc + item.cycleTime, 0);
+    return roundHalfUp(sum / cycleTimeData.length);
 }
