@@ -485,7 +485,10 @@ async function main() {
                 epics.map(async (epic) => {
                     const [existing, openTicketCount] = await Promise.all([
                         getRetrospective(epic.key),
-                        getOpenTicketCount(epic.key),
+                        getOpenTicketCount(epic.key).catch((err) => {
+                            console.warn(`Could not get open ticket count for ${epic.key}:`, err.message);
+                            return 0;
+                        }),
                     ]);
                     const completionDate = computeAnticipatedCompletionDate(
                         new Date(),
