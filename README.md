@@ -46,20 +46,35 @@ The `/health` endpoint is exempt from authentication so Cloud Run can probe it f
 
 ### Adding or Removing Users
 
-Update the `retrospective-allowed-emails` secret with a comma-separated list of email addresses:
+The allowlist lives in the `retrospective-allowed-emails` secret as one comma-separated
+string. A new secret version **replaces** the whole value — it does not append — so always
+read the current list first and write it back with your addition:
 
 ```bash
-echo -n "user1@example.com,user2@example.com" | \
+CURRENT=$(gcloud secrets versions access latest \
+  --secret=retrospective-allowed-emails --project=gdl-reader-dev)
+
+echo -n "$CURRENT,new.person@example.com" | \
   gcloud secrets versions add retrospective-allowed-emails \
   --project=gdl-reader-dev --data-file=-
 ```
 
-Changes take effect on the next container startup. To force immediate effect:
+Use `echo -n` — a trailing newline would end up inside the last email address.
+
+Changes take effect on the next container startup. To force immediate effect, redeploy the
+image the service is already running (this restarts it without shipping a code change):
 
 ```bash
+IMAGE=$(gcloud run services describe retrospective-agent \
+  --region=us-east1 --project=gdl-reader-dev \
+  --format='value(spec.template.spec.containers[0].image)')
+
 gcloud run deploy retrospective-agent --region=us-east1 --project=gdl-reader-dev \
-  --image=us-east1-docker.pkg.dev/gdl-reader-dev/gdl-reader/retrospective-agent:latest
+  --image="$IMAGE"
 ```
+
+Images are tagged by commit SHA (see `cloudbuild.yaml`) — there is no `:latest` tag, which
+is why the image reference is looked up rather than hardcoded.
 
 ------------------------------------------------------------------------
 
