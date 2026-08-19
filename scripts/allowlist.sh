@@ -20,11 +20,16 @@ ASSUME_YES=false
 DRY_RUN=false
 FORCE=false
 
-# Set when write_version stages a payload; cleaned up on exit. Kept global so
-# the EXIT trap can see it -- a trap referencing a function-local would trip
-# `set -u` at exit and fail the script after a successful write.
+# Scratch files, cleaned up on exit. Kept global so the EXIT trap can see them --
+# a trap referencing a function-local would trip `set -u` at exit and fail the
+# script after a successful write.
 TMPFILE=""
-cleanup() { [[ -n $TMPFILE ]] && rm -f "$TMPFILE"; return 0; }
+ERRFILE=""
+cleanup() {
+    [[ -n $TMPFILE ]] && rm -f "$TMPFILE"
+    [[ -n $ERRFILE ]] && rm -f "$ERRFILE"
+    return 0
+}
 trap cleanup EXIT
 
 usage() {
@@ -47,6 +52,12 @@ Options:
 
 Environment overrides: ALLOWLIST_PROJECT, ALLOWLIST_SECRET, ALLOWLIST_SERVICE,
 ALLOWLIST_REGION.
+
+Permissions: reading needs roles/secretmanager.secretAccessor; add/remove also
+needs roles/secretmanager.secretVersionAdder; versions needs
+roles/secretmanager.viewer; redeploy needs roles/run.developer plus
+roles/iam.serviceAccountUser on the runtime service account. Details in
+README.md, "Permissions required".
 
 Examples:
   scripts/allowlist.sh list
@@ -97,24 +108,27 @@ require_gcloud() {
         die "gcloud is not installed. See README.md (Developer Setup) to install it."
 }
 
-# Reads the current payload to stdout. Turns the two failures you actually hit
-# -- expired credentials and a missing accessor role -- into instructions.
-read_current() {
-    local out status
+# Reads one version's payload to stdout ("latest" if unspecified). Keeps stderr
+# out of the payload, and turns the failures you actually hit -- expired
+# credentials, a missing role -- into instructions.
+read_version() {
+    local version=${1:-latest} out status err
+    ERRFILE=${ERRFILE:-$(mktemp)}
     set +e
-    out=$(gcloud secrets versions access latest \
-        --secret="$SECRET" --project="$PROJECT" 2>&1)
+    out=$(gcloud secrets versions access "$version" \
+        --secret="$SECRET" --project="$PROJECT" 2>"$ERRFILE")
     status=$?
     set -e
 
     if [[ $status -ne 0 ]]; then
-        case $out in
+        err=$(cat "$ERRFILE")
+        case $err in
             *Reauthentication*|*"auth login"*|*"invalid_grant"*)
                 die "gcloud credentials have expired. Run: gcloud auth login" ;;
             *PERMISSION_DENIED*|*"does not have"*)
-                die "Your account lacks roles/secretmanager.secretAccessor on $PROJECT." ;;
+                die "Reading $SECRET needs roles/secretmanager.secretAccessor (on the secret or on $PROJECT). See README.md, 'Permissions required'." ;;
             *)
-                printf '%s\n' "$out" >&2
+                printf '%s\n' "$err" >&2
                 die "Could not read secret $SECRET." ;;
         esac
     fi
@@ -124,7 +138,7 @@ read_current() {
 # Populates the global `current` array from the secret's current value.
 load_current() {
     local raw parts part clean
-    raw=$(read_current)
+    raw=$(read_version)
     current=()
     IFS=',' read -r -a parts <<<"$raw"
     for part in ${parts[@]+"${parts[@]}"}; do
@@ -162,11 +176,37 @@ write_version() {
     TMPFILE=$(mktemp)
     ( umask 077; printf '%s' "$payload" >"$TMPFILE" )
 
-    gcloud secrets versions add "$SECRET" --project="$PROJECT" --data-file="$TMPFILE"
+    local version_name version add_status err
+    ERRFILE=${ERRFILE:-$(mktemp)}
+    set +e
+    version_name=$(gcloud secrets versions add "$SECRET" \
+        --project="$PROJECT" --data-file="$TMPFILE" --format='value(name)' 2>"$ERRFILE")
+    add_status=$?
+    set -e
+    err=$(cat "$ERRFILE")
+    if [[ $add_status -ne 0 ]]; then
+        printf '%s\n' "$err" >&2
+        case $err in
+            *PERMISSION_DENIED*|*"does not have"*)
+                die "Writing a new version needs roles/secretmanager.secretVersionAdder -- reading the allowlist does not imply writing it. See README.md, 'Permissions required'." ;;
+            *)
+                die "Could not add a new version of $SECRET." ;;
+        esac
+    fi
 
-    verify=$(read_current)
-    [[ $verify == "$payload" ]] ||
-        die "Verification failed: the new version does not match what we wrote."
+    version=${version_name##*/}
+    note "Created version ${version:-?} of $SECRET."
+
+    # Verify against the version we just created. Asking for "latest" here races
+    # propagation and can return the previous version, which would report a
+    # successful write as a failure.
+    verify=$(read_version "${version:-latest}")
+    if [[ $verify != "$payload" ]]; then
+        note "Wrote version $version, but reading it back gave something else."
+        note "  expected: $payload"
+        note "  got:      $verify"
+        die "Verification failed. The version was created -- check it before rewriting."
+    fi
     note "Verified: the new version matches."
     note "Change takes effect on the next container startup."
     note "To apply it now: scripts/allowlist.sh redeploy"
@@ -253,11 +293,12 @@ cmd_remove() {
 # commit SHA (see cloudbuild.yaml) -- there is no :latest tag, so the reference
 # has to be looked up rather than hardcoded.
 cmd_redeploy() {
-    local image url code
+    local image url code deploy_out deploy_status
     image=$(gcloud run services describe "$SERVICE" \
         --region="$REGION" --project="$PROJECT" \
-        --format='value(spec.template.spec.containers[0].image)')
-    [[ -n $image ]] || die "Could not determine the image $SERVICE is running."
+        --format='value(spec.template.spec.containers[0].image)' 2>/dev/null || true)
+    [[ -n $image ]] ||
+        die "Could not read $SERVICE. Redeploying needs roles/run.developer on $PROJECT. See README.md, 'Permissions required'."
     note "Redeploying $SERVICE on $image"
 
     if $DRY_RUN; then
@@ -265,8 +306,20 @@ cmd_redeploy() {
         return 0
     fi
 
-    gcloud run deploy "$SERVICE" \
-        --region="$REGION" --project="$PROJECT" --image="$image"
+    set +e
+    deploy_out=$(gcloud run deploy "$SERVICE" \
+        --region="$REGION" --project="$PROJECT" --image="$image" 2>&1)
+    deploy_status=$?
+    set -e
+    printf '%s\n' "$deploy_out"
+    if [[ $deploy_status -ne 0 ]]; then
+        case $deploy_out in
+            *actAs*|*iam.serviceAccounts.actAs*|*"service account"*)
+                die "Deploying needs roles/iam.serviceAccountUser on the runtime service account, in addition to roles/run.developer. See README.md, 'Permissions required'." ;;
+            *)
+                die "Redeploy failed." ;;
+        esac
+    fi
 
     url=$(gcloud run services describe "$SERVICE" \
         --region="$REGION" --project="$PROJECT" --format='value(status.url)')

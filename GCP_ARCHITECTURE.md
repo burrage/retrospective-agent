@@ -143,6 +143,8 @@ echo -n 'new-value' | gcloud secrets versions add SECRET_NAME \
 
 To read secrets, a Google account or service account needs the `roles/secretmanager.secretAccessor` role on the project. This is what the admin grants to new developers so they can run the app locally.
 
+That role covers reading only — it grants `secretmanager.versions.access` and nothing else. Writing a new version needs `roles/secretmanager.secretVersionAdder`, and listing a secret's versions needs `roles/secretmanager.viewer`; neither is implied by `secretAccessor`. Someone who can start the app locally therefore cannot necessarily update the allowlist. See [Permissions required](README.md#permissions-required) for the full set the allowlist script needs, including the Cloud Run roles for redeploying.
+
 ### Where to find it in GCP Console
 
 **Secret Manager** — lists all secrets, their versions, and access logs.

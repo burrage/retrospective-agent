@@ -74,6 +74,57 @@ is why the script looks the image reference up rather than hardcoding it.
 If you would rather run the steps by hand, `scripts/allowlist.sh` is short and the
 `gcloud` invocations in it are the canonical ones.
 
+#### Permissions required
+
+The script needs these roles. Project **Owner** or **Editor** covers all of them — which
+is why it works for whoever set the project up, and why it is easy to hand a teammate a
+subset that only half works.
+
+| To run | You need | Grant on |
+| --- | --- | --- |
+| `list` (and the read half of `add`/`remove`) | `roles/secretmanager.secretAccessor` | the secret |
+| `add`, `remove` (writing a new version) | `roles/secretmanager.secretVersionAdder` | the secret |
+| `versions` | `roles/secretmanager.viewer` | the secret |
+| `redeploy` | `roles/run.developer` | the project |
+| `redeploy` | `roles/iam.serviceAccountUser` | the runtime service account |
+
+`secretAccessor` grants only `secretmanager.versions.access` — it does **not** allow
+writing a new version or even listing versions. Someone with just that role can run
+`list` and nothing else, so grant `secretVersionAdder` alongside it for anyone who
+manages access.
+
+`redeploy` needs `iam.serviceAccountUser` because deploying a Cloud Run service that runs
+as a service account requires permission to *act as* that account. The service runs as
+`959872421018-compute@developer.gserviceaccount.com`.
+
+To grant someone the ability to manage the allowlist (scoped to the one secret, not the
+whole project):
+
+```bash
+PERSON="user:person@curiouslearning.org"
+
+for ROLE in roles/secretmanager.secretAccessor \
+            roles/secretmanager.secretVersionAdder \
+            roles/secretmanager.viewer; do
+  gcloud secrets add-iam-policy-binding retrospective-allowed-emails \
+    --project=gdl-reader-dev --member="$PERSON" --role="$ROLE"
+done
+```
+
+And to let them redeploy as well:
+
+```bash
+gcloud projects add-iam-policy-binding gdl-reader-dev \
+  --member="$PERSON" --role=roles/run.developer
+
+gcloud iam service-accounts add-iam-policy-binding \
+  959872421018-compute@developer.gserviceaccount.com \
+  --project=gdl-reader-dev --member="$PERSON" --role=roles/iam.serviceAccountUser
+```
+
+To check what you have, just run `./scripts/allowlist.sh list` — it names the missing role
+when a call is denied.
+
 ------------------------------------------------------------------------
 
 ## Developer Setup
