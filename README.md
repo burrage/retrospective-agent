@@ -46,35 +46,33 @@ The `/health` endpoint is exempt from authentication so Cloud Run can probe it f
 
 ### Adding or Removing Users
 
-The allowlist lives in the `retrospective-allowed-emails` secret as one comma-separated
-string. A new secret version **replaces** the whole value — it does not append — so always
-read the current list first and write it back with your addition:
+Use `scripts/allowlist.sh`:
 
 ```bash
-CURRENT=$(gcloud secrets versions access latest \
-  --secret=retrospective-allowed-emails --project=gdl-reader-dev)
-
-echo -n "$CURRENT,new.person@example.com" | \
-  gcloud secrets versions add retrospective-allowed-emails \
-  --project=gdl-reader-dev --data-file=-
+./scripts/allowlist.sh list                          # who has access today
+./scripts/allowlist.sh add --dry-run jan@codev.com   # preview the change
+./scripts/allowlist.sh add jan@codev.com miguel@codev.com
+./scripts/allowlist.sh remove someone@codev.com
+./scripts/allowlist.sh redeploy                      # apply the change immediately
 ```
 
-Use `echo -n` — a trailing newline would end up inside the last email address.
+The script reads the current list, writes it back with your change, and verifies the
+result. Run `./scripts/allowlist.sh --help` for all options.
 
-Changes take effect on the next container startup. To force immediate effect, redeploy the
-image the service is already running (this restarts it without shipping a code change):
+**Why a script rather than a one-line `gcloud` command:** the allowlist lives in the
+`retrospective-allowed-emails` secret as one comma-separated string, and a new secret
+version **replaces** the whole value — it does not append. Writing just the new address
+would silently revoke everyone else's access. The script always reads the current value
+first, and uses `printf` rather than `echo`, since a trailing newline would end up inside
+the last email address.
 
-```bash
-IMAGE=$(gcloud run services describe retrospective-agent \
-  --region=us-east1 --project=gdl-reader-dev \
-  --format='value(spec.template.spec.containers[0].image)')
+Changes take effect on the next container startup. `redeploy` forces it immediately by
+redeploying the image the service is already running — a restart, not a code change.
+Images are tagged by commit SHA (see `cloudbuild.yaml`); there is no `:latest` tag, which
+is why the script looks the image reference up rather than hardcoding it.
 
-gcloud run deploy retrospective-agent --region=us-east1 --project=gdl-reader-dev \
-  --image="$IMAGE"
-```
-
-Images are tagged by commit SHA (see `cloudbuild.yaml`) — there is no `:latest` tag, which
-is why the image reference is looked up rather than hardcoded.
+If you would rather run the steps by hand, `scripts/allowlist.sh` is short and the
+`gcloud` invocations in it are the canonical ones.
 
 ------------------------------------------------------------------------
 
@@ -195,10 +193,19 @@ To deploy manually:
 
 ```bash
 gcloud run deploy retrospective-agent \
-  --image=us-east1-docker.pkg.dev/gdl-reader-dev/gdl-reader/retrospective-agent:latest \
+  --image=us-east1-docker.pkg.dev/gdl-reader-dev/gdl-reader/retrospective-agent:COMMIT_SHA \
   --region=us-east1 \
   --platform=managed \
   --allow-unauthenticated \
+  --project=gdl-reader-dev
+```
+
+Replace `COMMIT_SHA` with the commit you want to deploy — `cloudbuild.yaml` tags images by
+commit SHA and never publishes a `:latest` tag. To list what has been built:
+
+```bash
+gcloud artifacts docker tags list \
+  us-east1-docker.pkg.dev/gdl-reader-dev/gdl-reader/retrospective-agent \
   --project=gdl-reader-dev
 ```
 

@@ -131,7 +131,7 @@ The secrets our app uses:
 
 Every time you update a secret, Secret Manager creates a new version. The old version isn't deleted — it just becomes inactive, so rolling back means reading an older version and adding its value back as a new one. Our app always reads `versions/latest`, so updating a secret takes effect on the next container startup. To force it immediately, redeploy the service (see [Adding or Removing Users](README.md#adding-or-removing-users) for the exact command).
 
-Versions are immutable, whole-payload snapshots — there is no in-place edit and no merge. For any secret holding a *list* (like `retrospective-allowed-emails`), read the current value and write it back with your change included, or the new version will silently drop everything else.
+Versions are immutable, whole-payload snapshots — there is no in-place edit and no merge. For any secret holding a *list* (like `retrospective-allowed-emails`), read the current value and write it back with your change included, or the new version will silently drop everything else. For the allowlist specifically, use `scripts/allowlist.sh`, which does the read-modify-write for you.
 
 To update a secret:
 ```bash
