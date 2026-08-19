@@ -8,6 +8,29 @@ function isWeekend(date: Date) {
   return d === 0 || d === 6;
 }
 
+export function addWorkingDays(start: Date, days: number): Date {
+  const current = new Date(start);
+  let remaining = days;
+  while (remaining > 0) {
+    current.setDate(current.getDate() + 1);
+    if (!isWeekend(current)) {
+      remaining--;
+    }
+  }
+  return current;
+}
+
+export function advanceToMonday(date: Date): Date {
+  const d = new Date(date);
+  const day = d.getDay();
+  if (day === 6) {
+    d.setDate(d.getDate() + 2);
+  } else if (day === 0) {
+    d.setDate(d.getDate() + 1);
+  }
+  return d;
+}
+
 export function workingDaysBetween(start: Date, end: Date): number {
   let current = new Date(start);
   let total = 0;

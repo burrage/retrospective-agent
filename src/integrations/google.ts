@@ -1,15 +1,10 @@
 import { google } from "googleapis";
-import { config } from "../config.js";
+import type { AppConfig } from "../config.js";
 
-const auth = new google.auth.OAuth2(
-    config.GOOGLE_CLIENT_ID,
-    config.GOOGLE_CLIENT_SECRET,
-    config.GOOGLE_REDIRECT_URI
-);
-
-auth.setCredentials({
-    refresh_token: config.GOOGLE_REFRESH_TOKEN
-});
+// ---------------------------------------------------------------------------
+// All exported functions now accept `config` so they use the service-account
+// JWT that was built at startup.  The module-level OAuth2 client is gone.
+// ---------------------------------------------------------------------------
 
 function getParagraphText(paragraph: any): string {
     return (paragraph.elements ?? [])
@@ -30,7 +25,7 @@ function findAllParagraphs(
         paragraphs.push({
             text,
             start: el.startIndex,
-            end: el.endIndex - 1
+            end: el.endIndex - 1,
         });
     }
 
@@ -49,8 +44,8 @@ function makeParagraphStyleRequest(
             paragraphStyle: alignment
                 ? { namedStyleType, alignment }
                 : { namedStyleType },
-            fields: alignment ? "namedStyleType,alignment" : "namedStyleType"
-        }
+            fields: alignment ? "namedStyleType,alignment" : "namedStyleType",
+        },
     };
 }
 
@@ -59,38 +54,21 @@ function makeBoldRange(startIndex: number, endIndex: number) {
         updateTextStyle: {
             range: { startIndex, endIndex },
             textStyle: { bold: true },
-            fields: "bold"
-        }
+            fields: "bold",
+        },
     };
 }
 
-export async function createDoc(title: string, content: string) {
-    const docs = google.docs({ version: "v1", auth });
-
-    const doc = await docs.documents.create({
-        requestBody: { title }
-    });
-
-    const id = doc.data.documentId;
-    if (!id) {
-        throw new Error("No Google Doc ID returned");
-    }
-
-    // Insert all text
-    await docs.documents.batchUpdate({
-        documentId: id,
-        requestBody: {
-            requests: [
-                {
-                    insertText: {
-                        location: { index: 1 },
-                        text: content
-                    }
-                }
-            ]
-        }
-    });
-
+/**
+ * Applies paragraph styling, bold labels, bullet points, and Jira key
+ * hyperlinks to an existing Google Doc. Used by both createDoc and overwriteDoc.
+ */
+async function applyDocFormatting(
+    docs: ReturnType<typeof google.docs>,
+    id: string,
+    title: string,
+    config: AppConfig
+): Promise<void> {
     // Pass 1: paragraph styles
     {
         const fullDoc = await docs.documents.get({ documentId: id });
@@ -99,7 +77,6 @@ export async function createDoc(title: string, content: string) {
 
         const requests: any[] = [];
 
-        // Title
         const titleParagraph = paragraphs.find((p) => p.text === title);
         if (titleParagraph) {
             requests.push(
@@ -112,7 +89,6 @@ export async function createDoc(title: string, content: string) {
             );
         }
 
-        // Subtitle
         const subtitleParagraph = paragraphs.find((p) =>
             /^Retrospective - \d{2}\/\d{2}\/\d{4}$/.test(p.text)
         );
@@ -127,53 +103,43 @@ export async function createDoc(title: string, content: string) {
             );
         }
 
-        // Heading 3 sections
         const heading3Texts = ["TIMELINE", "TEAM STATS"];
         for (const p of paragraphs) {
             if (heading3Texts.includes(p.text)) {
-                requests.push(
-                    makeParagraphStyleRequest(p.start, p.end, "HEADING_3")
-                );
+                requests.push(makeParagraphStyleRequest(p.start, p.end, "HEADING_3"));
             }
         }
 
-        // Heading 1 sections
         const heading1Texts = [
             "Key Artifacts Generated:",
             "Business Value Created:",
             "Success Looks Like:",
             "What Went Well:",
             "What Didn't Go As Planned:",
-            "What Should We Do Differently Next Time:"
+            "What Should We Do Differently Next Time:",
         ];
 
         for (const p of paragraphs) {
             if (heading1Texts.includes(p.text)) {
-                requests.push(
-                    makeParagraphStyleRequest(p.start, p.end, "HEADING_1")
-                );
+                requests.push(makeParagraphStyleRequest(p.start, p.end, "HEADING_1"));
             }
         }
 
-        // Metadata lines as normal text
         const metadataPrefixes = [
             "Epic Timeline:",
             "Duration:",
             "Share of Year:",
             "Team Name:",
             "Average Cycle Time:",
-            "Throughput:"
+            "Throughput:",
         ];
 
         for (const p of paragraphs) {
             if (metadataPrefixes.some((prefix) => p.text.startsWith(prefix))) {
-                requests.push(
-                    makeParagraphStyleRequest(p.start, p.end, "NORMAL_TEXT")
-                );
+                requests.push(makeParagraphStyleRequest(p.start, p.end, "NORMAL_TEXT"));
             }
         }
 
-        // Body text under heading 1 sections as normal text
         for (let i = 0; i < paragraphs.length; i++) {
             const p = paragraphs[i];
 
@@ -195,21 +161,19 @@ export async function createDoc(title: string, content: string) {
                 .find((para) => heading1Texts.includes(para.text));
 
             if (previousHeading1 && p.text.trim() !== "") {
-                requests.push(
-                    makeParagraphStyleRequest(p.start, p.end, "NORMAL_TEXT")
-                );
+                requests.push(makeParagraphStyleRequest(p.start, p.end, "NORMAL_TEXT"));
             }
         }
 
         if (requests.length > 0) {
             await docs.documents.batchUpdate({
                 documentId: id,
-                requestBody: { requests }
+                requestBody: { requests },
             });
         }
     }
 
-    // Pass 2: bold metadata labels only
+    // Pass 2: bold metadata labels
     {
         const refreshedDoc = await docs.documents.get({ documentId: id });
         const refreshedContent = refreshedDoc.data.body?.content ?? [];
@@ -220,7 +184,7 @@ export async function createDoc(title: string, content: string) {
             "Share of Year:",
             "Team Name:",
             "Average Cycle Time:",
-            "Throughput:"
+            "Throughput:",
         ];
 
         const boldRequests: any[] = [];
@@ -241,88 +205,79 @@ export async function createDoc(title: string, content: string) {
         if (boldRequests.length > 0) {
             await docs.documents.batchUpdate({
                 documentId: id,
-                requestBody: { requests: boldRequests }
+                requestBody: { requests: boldRequests },
             });
         }
     }
 
-    // Pass 3: convert lines starting with "- " into real bullets
+    // Pass 3: convert "- " lines into real bullets
     {
         const bulletDoc = await docs.documents.get({ documentId: id });
         const bulletContent = bulletDoc.data.body?.content ?? [];
-
         const bulletParagraphs: Array<{ start: number; end: number }> = [];
 
         for (const el of bulletContent) {
             if (!el.paragraph || el.startIndex == null || el.endIndex == null) continue;
 
             const text = getParagraphText(el.paragraph);
-
             if (text.startsWith("- ")) {
-                bulletParagraphs.push({
-                    start: el.startIndex,
-                    end: el.endIndex - 1
-                });
+                bulletParagraphs.push({ start: el.startIndex, end: el.endIndex - 1 });
             }
         }
 
         const bulletRequests = bulletParagraphs.map((p) => ({
             createParagraphBullets: {
-                range: {
-                    startIndex: p.start,
-                    endIndex: p.end
-                },
-                bulletPreset: "BULLET_DISC_CIRCLE_SQUARE"
-            }
+                range: { startIndex: p.start, endIndex: p.end },
+                bulletPreset: "BULLET_DISC_CIRCLE_SQUARE",
+            },
         }));
 
         if (bulletRequests.length > 0) {
             await docs.documents.batchUpdate({
                 documentId: id,
-                requestBody: { requests: bulletRequests }
+                requestBody: { requests: bulletRequests },
             });
         }
     }
 
-    // Pass 3b: remove the leading "- " from those bullet paragraphs
+    // Pass 3b: strip the leading "- " text from bullet paragraphs
     {
         const cleanupDoc = await docs.documents.get({ documentId: id });
         const cleanupContent = cleanupDoc.data.body?.content ?? [];
-
         const deleteRequests: any[] = [];
 
         for (const el of cleanupContent) {
             if (!el.paragraph || el.startIndex == null) continue;
 
             const text = getParagraphText(el.paragraph);
-
             if (text.startsWith("- ")) {
                 deleteRequests.push({
                     deleteContentRange: {
                         range: {
                             startIndex: el.startIndex,
-                            endIndex: el.startIndex + 2
-                        }
-                    }
+                            endIndex: el.startIndex + 2,
+                        },
+                    },
                 });
             }
         }
 
-        // Important: delete from bottom to top so earlier indexes do not shift
+        // Delete bottom-to-top so earlier indexes don't shift
         deleteRequests.sort(
             (a, b) =>
-                b.deleteContentRange.range.startIndex - a.deleteContentRange.range.startIndex
+                b.deleteContentRange.range.startIndex -
+                a.deleteContentRange.range.startIndex
         );
 
         if (deleteRequests.length > 0) {
             await docs.documents.batchUpdate({
                 documentId: id,
-                requestBody: { requests: deleteRequests }
+                requestBody: { requests: deleteRequests },
             });
         }
     }
 
-    // Pass 4: add Jira links to keys like AJ-589
+    // Pass 4: hyperlink Jira keys like AJ-589
     {
         const linkedDoc = await docs.documents.get({ documentId: id });
         const linkedContent = linkedDoc.data.body?.content ?? [];
@@ -346,12 +301,10 @@ export async function createDoc(title: string, content: string) {
                     updateTextStyle: {
                         range: { startIndex, endIndex },
                         textStyle: {
-                            link: {
-                                url: `${config.JIRA_BASE_URL}/browse/${key}`
-                            }
+                            link: { url: `${config.JIRA_BASE_URL}/browse/${key}` },
                         },
-                        fields: "link"
-                    }
+                        fields: "link",
+                    },
                 });
             }
         }
@@ -359,10 +312,147 @@ export async function createDoc(title: string, content: string) {
         if (linkRequests.length > 0) {
             await docs.documents.batchUpdate({
                 documentId: id,
-                requestBody: { requests: linkRequests }
+                requestBody: { requests: linkRequests },
+            });
+        }
+    }
+}
+
+export async function createDoc(
+    title: string,
+    content: string,
+    config: AppConfig
+) {
+    const auth = config.googleAuth;
+    const docs = google.docs({ version: "v1", auth });
+
+    const doc = await docs.documents.create({
+        requestBody: { title },
+    });
+
+    const id = doc.data.documentId;
+    if (!id) throw new Error("No Google Doc ID returned");
+
+    // Insert all text
+    await docs.documents.batchUpdate({
+        documentId: id,
+        requestBody: {
+            requests: [
+                {
+                    insertText: {
+                        location: { index: 1 },
+                        text: content,
+                    },
+                },
+            ],
+        },
+    });
+
+    await applyDocFormatting(docs, id, title, config);
+
+    // Pass 5: move the doc into the target Drive folder
+    {
+        const folderId = config.GOOGLE_DRIVE_FOLDER_ID;
+        if (folderId) {
+            const drive = google.drive({ version: "v3", auth });
+
+            // Get the current parents so we can remove them
+            const fileMeta = await drive.files.get({
+                fileId: id,
+                fields: "parents",
+            });
+
+            const previousParents = (fileMeta.data.parents ?? []).join(",");
+
+            await drive.files.update({
+                fileId: id,
+                addParents: folderId,
+                removeParents: previousParents,
+                fields: "id,parents",
             });
         }
     }
 
+    // Pass 6: share the doc with the product-development group as editor
+    await shareDocWithGroup(id, PRODUCT_DEVELOPMENT_GROUP, config);
+
     return `https://docs.google.com/document/d/${id}`;
+}
+
+/**
+ * Overwrites the content of an existing Google Doc identified by `documentId`.
+ * The document URL (and therefore the entry in the History table) remains unchanged.
+ * The doc is not moved or re-shared because it already lives in the correct
+ * folder and has the correct permissions.
+ */
+export async function overwriteDoc(
+    documentId: string,
+    title: string,
+    content: string,
+    config: AppConfig
+): Promise<void> {
+    const auth = config.googleAuth;
+    const docs = google.docs({ version: "v1", auth });
+
+    // Determine the current end index so we can delete all existing content
+    const existingDoc = await docs.documents.get({ documentId });
+    const bodyContent = existingDoc.data.body?.content ?? [];
+    const lastElement = bodyContent[bodyContent.length - 1];
+    const endIndex = lastElement?.endIndex ?? 2;
+
+    // Delete everything except the mandatory trailing newline (index 0 is reserved)
+    if (endIndex > 2) {
+        await docs.documents.batchUpdate({
+            documentId,
+            requestBody: {
+                requests: [
+                    {
+                        deleteContentRange: {
+                            range: { startIndex: 1, endIndex: endIndex - 1 },
+                        },
+                    },
+                ],
+            },
+        });
+    }
+
+    // Insert the new content
+    await docs.documents.batchUpdate({
+        documentId,
+        requestBody: {
+            requests: [
+                {
+                    insertText: {
+                        location: { index: 1 },
+                        text: content,
+                    },
+                },
+            ],
+        },
+    });
+
+    await applyDocFormatting(docs, documentId, title, config);
+}
+
+const PRODUCT_DEVELOPMENT_GROUP = "productdevelopment@curiouslearning.org";
+
+/**
+ * Grants editor ("writer") access to a Google Drive file for the given group
+ * email address. Exported for unit testing.
+ */
+export async function shareDocWithGroup(
+    fileId: string,
+    groupEmail: string,
+    config: AppConfig
+): Promise<void> {
+    const drive = google.drive({ version: "v3", auth: config.googleAuth });
+    await drive.permissions.create({
+        fileId,
+        sendNotificationEmail: false,
+        requestBody: {
+            type: "group",
+            role: "writer",
+            emailAddress: groupEmail,
+        },
+    });
 }
